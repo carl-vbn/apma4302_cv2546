@@ -3,13 +3,17 @@
 
 int main(int argc, char **argv) {
     PetscMPIInt    rank;
+    PetscMPIInt    size; // number of processes
     PetscInt       i;
-    PetscReal      x = 1.0, localval, globalsum;
+    PetscInt       n;
+    PetscReal      x = 1.0, localsum, localproduct, globalsum;
     PetscInt       N = 1;
+    PetscInt       termsPerProc, leftoverTerms;
 
     PetscCall(PetscInitialize(&argc,&argv,NULL,
         "Compute exp(x) in parallel with PETSc balanced for N-terms.\n\n"));
     PetscCall(MPI_Comm_rank(PETSC_COMM_WORLD,&rank));
+    PetscCall(MPI_Comm_size(PETSC_COMM_WORLD,&size));
 
     // read option
     PetscOptionsBegin(PETSC_COMM_WORLD,"","options for expx","");
@@ -17,13 +21,33 @@ int main(int argc, char **argv) {
     PetscCall(PetscOptionsInt("-N","number of terms to use",NULL,N,&N,NULL));
     PetscOptionsEnd();
 
-    // compute  x^n/n!  where n = (rank of process) + 1
-    localval = 1.0;
-    for (i = 1; i < rank+1; i++)
-        localval *= x/i;
+    termsPerProc = N / size;
+    leftoverTerms = 0;
+    localsum = 0.0;
+    localproduct = 1.0;
+    i = 1;
+
+    // If there are too many processes, compute one term each for the first N ranks
+    if (termsPerProc == 0) {
+        termsPerProc = rank < N ? 1 : 0;
+    } else if (rank == size - 1) {
+        // Otherwise, if we're the last rank, take any leftover terms
+        leftoverTerms = N % size;
+    }
+
+    // compute  x^n/n!
+    for (n = 1 + rank * termsPerProc; n <= (rank + 1) * termsPerProc + leftoverTerms; n++) {
+        PetscCall(PetscPrintf(PETSC_COMM_SELF,
+            "rank %d computing term n=%d\n",rank,n));
+        for (; i < n; i++) { // Don't reset to 1, save work by starting from previous product
+            localproduct *= x/i;
+        }
+
+        localsum += localproduct;
+    }
 
     // sum the contributions over all processes
-    PetscCall(MPI_Allreduce(&localval,&globalsum,1,MPIU_REAL,MPIU_SUM,
+    PetscCall(MPI_Allreduce(&localsum,&globalsum,1,MPIU_REAL,MPIU_SUM,
         PETSC_COMM_WORLD));
 
     // output estimate and report on work from each process
@@ -33,8 +57,7 @@ int main(int argc, char **argv) {
         PetscCall(PetscPrintf(PETSC_COMM_SELF,
             "exp(%17.15f) is about %17.15f (error = %ld*EPS)\n",x,globalsum,error));
     }
-    PetscCall(PetscPrintf(PETSC_COMM_SELF,
-        "rank %d did %d flops\n",rank,(rank > 0) ? 2*rank : 0));
+
     PetscCall(PetscFinalize());
     return 0;
 }
