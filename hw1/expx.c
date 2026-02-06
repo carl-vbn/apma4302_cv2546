@@ -4,9 +4,9 @@
 int main(int argc, char **argv) {
     PetscMPIInt    rank;
     PetscMPIInt    size; // number of processes
-    PetscInt       i;
+    PetscInt       i, k;
     PetscInt       n;
-    PetscReal      x = 1.0, localsum, localproduct, globalsum;
+    PetscReal      x = 1.0, localsum, localprod, globalsum, multiplier, prevMultiplier;
     PetscInt       N = 1;
     PetscInt       termsPerProc, leftoverTerms;
 
@@ -23,27 +23,43 @@ int main(int argc, char **argv) {
 
     termsPerProc = N / size;
     leftoverTerms = 0;
-    localsum = 0.0;
-    localproduct = 1.0;
-    i = 1;
+    localsum = 1.0;
+    localprod = 1.0;
+    k = rank * termsPerProc;
+    
+    for (i = 1; i < termsPerProc; i++) { // i = local term index
+        k = rank * termsPerProc + i; // k = global term index
 
-    // If there are too many processes, compute one term each for the first N ranks
-    if (termsPerProc == 0) {
-        termsPerProc = rank < N ? 1 : 0;
-    } else if (rank == size - 1) {
-        // Otherwise, if we're the last rank, take any leftover terms
-        leftoverTerms = N % size;
+        localprod *= x / k;
+        localsum += localprod;
+        
+        // For debugging only
+        // PetscCall(PetscPrintf(PETSC_COMM_SELF,
+        //     "rank %d: term %d: x / %d\n",rank,k,k));
     }
 
-    // compute  x^n/n!
-    for (n = 1 + rank * termsPerProc; n <= (rank + 1) * termsPerProc + leftoverTerms; n++) {
-        PetscCall(PetscPrintf(PETSC_COMM_SELF,
-            "rank %d computing term n=%d\n",rank,n));
-        for (; i < n; i++) { // Don't reset to 1, save work by starting from previous product
-            localproduct *= x/i;
-        }
+    multiplier = localprod * x / (k + 1); // Compute one more term for stitching
 
-        localsum += localproduct;
+    // For debugging only
+    // PetscCall(PetscPrintf(PETSC_COMM_SELF,
+    //     "rank %d: multiplier for stitching last term: x / %d\n",rank,k + 1));
+
+    // Stitching process
+    // Note: it's ok to wait for message here since the heavy work is done
+    // so we're not blocking any expensive computation
+    if (rank > 0) {
+        // Receive multiplier from previous rank
+        PetscCall(MPI_Recv(&prevMultiplier, 1, MPIU_REAL, rank - 1, 0,
+            PETSC_COMM_WORLD, MPI_STATUS_IGNORE));
+
+        localsum *= prevMultiplier;
+        multiplier *= prevMultiplier;
+    }
+
+    if (rank < size - 1) {
+        // Send multiplier to next rank
+        PetscCall(MPI_Send(&multiplier, 1, MPIU_REAL, rank + 1, 0,
+            PETSC_COMM_WORLD));
     }
 
     // sum the contributions over all processes
