@@ -113,7 +113,7 @@ end:
         unsigned long error = fabs(exp(x) - globalsum)/PETSC_MACHINE_EPSILON;
 
         PetscCall(PetscPrintf(PETSC_COMM_SELF,
-            "exp(%17.15f) is about %17.15f (error = %ld*EPS)\n",x,globalsum,error));
+            "exp(%17.15f) is about %17.15f (error = %lu*EPS)\n",x,globalsum,error));
     }
 
     PetscCall(PetscFinalize());
